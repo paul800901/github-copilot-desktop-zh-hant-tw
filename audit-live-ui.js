@@ -226,7 +226,10 @@ async function main() {
         const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
         const visible = element => element && element.getClientRects().length > 0;
         const settingsButton = [...document.querySelectorAll('button')].find(element =>
-          visible(element) && ['Settings', '設定'].includes(element.getAttribute('aria-label'))
+          visible(element) && ['Settings', '設定'].some(label => {
+            const ariaLabel = element.getAttribute('aria-label') || '';
+            return ariaLabel === label || ariaLabel.startsWith(label + ',') || ariaLabel.startsWith(label + '，');
+          })
         );
         if (settingsButton) {
           settingsButton.click();

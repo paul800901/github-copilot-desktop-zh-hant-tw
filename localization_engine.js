@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const PROJECT_NAME = 'GitHub Copilot Desktop 繁體中文（台灣）';
-const ENGINE_VERSION = '0.2.6';
+const ENGINE_VERSION = '0.2.7';
 const SIGNATURE = 'GITHUB_COPILOT_ZH_HANT_TW';
 const DEFAULT_EXE = path.join(
   process.env.LOCALAPPDATA || '',
@@ -105,6 +105,15 @@ function browserLocalization(dictionary, engineVersion) {
 
     match = key.match(/^Downloading update — (.+)$/);
     if (match) return `正在下載更新 — ${match[1]}`;
+
+    match = key.match(/^Up to date\. Last checked on (.+)\.$/);
+    if (match) {
+      const checkedAt = new Date(match[1].replace(/,\s+at\s+/i, ' '));
+      const checkedAtText = Number.isNaN(checkedAt.getTime())
+        ? match[1]
+        : new Intl.DateTimeFormat('zh-TW', { dateStyle: 'long', timeStyle: 'short' }).format(checkedAt);
+      return `已是最新版本。上次檢查時間：${checkedAtText}。`;
+    }
 
     match = key.match(/^Reasoning effort: (.+)$/);
     if (match) return `推理強度：${map.get(normalize(match[1])) || match[1]}`;
