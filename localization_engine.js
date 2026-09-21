@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const PROJECT_NAME = 'GitHub Copilot Desktop 繁體中文（台灣）';
-const ENGINE_VERSION = '0.2.3';
+const ENGINE_VERSION = '0.2.6';
 const SIGNATURE = 'GITHUB_COPILOT_ZH_HANT_TW';
 const DEFAULT_EXE = path.join(
   process.env.LOCALAPPDATA || '',
@@ -24,6 +24,10 @@ const WATCHER_LOCK_FILE = path.join(
   'GitHub Copilot繁中化',
   'watcher.pid'
 );
+const TRAY_LOCALIZER_SOURCE = path.join(__dirname, 'tray-menu-localizer.cs');
+const TRAY_LOCALIZER_DIR = path.join(__dirname, '.local');
+const TRAY_LOCALIZER_EXE = path.join(TRAY_LOCALIZER_DIR, `tray-menu-localizer-${ENGINE_VERSION}.exe`);
+const TRAY_LOCALIZER_LOG = path.join(TRAY_LOCALIZER_DIR, 'tray-menu-localizer.log');
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -186,24 +190,56 @@ function browserLocalization(dictionary, engineVersion) {
   }
 
   async function patchNativeMenuModule() {
-    const menuUrl = Array.from(document.querySelectorAll('link[rel="modulepreload"]'))
-      .map(link => link.href)
-      .find(url => /\/assets\/menu-[^/]+\.js(?:\?|$)/.test(url));
-    if (!menuUrl) return false;
+    const resourceUrls = [
+      ...Array.from(document.querySelectorAll('link[rel="modulepreload"]')).map(link => link.href),
+      ...performance.getEntriesByType('resource').map(entry => entry.name)
+    ];
+    const menuUrls = new Set(resourceUrls.filter(url => /\/assets\/menu-[^/]+\.js(?:\?|$)/.test(url)));
+    const routerUrl = resourceUrls.find(url => /\/assets\/router-[^/]+\.js(?:\?|$)/.test(url));
+    if (routerUrl) {
+      try {
+        const routerSource = await fetch(routerUrl).then(response => response.text());
+        for (const match of routerSource.matchAll(/\.\/(menu-[A-Za-z0-9_-]+\.js)/g)) {
+          menuUrls.add(new URL(match[1], routerUrl).href);
+        }
+      } catch (_) {}
+    }
+    if (!menuUrls.size) return false;
 
-    const menuModule = await import(menuUrl);
+    let menuModule = null;
+    for (const menuUrl of menuUrls) {
+      try {
+        const candidate = await import(menuUrl);
+        if (candidate.Menu && candidate.MenuItem && candidate.PredefinedMenuItem) {
+          menuModule = candidate;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!menuModule) return false;
+
+    const nativeMenuTranslations = [];
+    let patchedClasses = 0;
     for (const className of ['MenuItem', 'IconMenuItem', 'CheckMenuItem', 'Submenu']) {
       const MenuClass = menuModule[className];
       if (!MenuClass || MenuClass.__ZH_HANT_TW_PATCHED__) continue;
       const originalNew = MenuClass.new;
       MenuClass.new = function localizedMenuItem(options) {
-        const localized = options && typeof options === 'object'
-          ? { ...options, text: translateNativeMenu(options.text) }
-          : options;
+        let localized = options;
+        if (options && typeof options === 'object') {
+          const translatedText = translateNativeMenu(options.text);
+          localized = { ...options, text: translatedText };
+          if (translatedText !== options.text) {
+            nativeMenuTranslations.push({ className, source: options.text, translation: translatedText });
+          }
+        }
         return originalNew.call(this, localized);
       };
       Object.defineProperty(MenuClass, '__ZH_HANT_TW_PATCHED__', { value: true });
+      patchedClasses += 1;
     }
+    if (!patchedClasses) return false;
+    window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU_TRANSLATIONS__ = nativeMenuTranslations;
     window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU__ = true;
     return true;
   }
@@ -676,30 +712,72 @@ function releaseWatcherLock() {
   } catch (_) {}
 }
 
-async function watchLocalization(source) {
+function ensureTrayMenuLocalizer() {
+  const compilerCandidates = [
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe')
+  ];
+  const compiler = compilerCandidates.find(candidate => fs.existsSync(candidate));
+  if (!compiler) throw new Error('找不到 Windows 內建的 C# 編譯器，無法啟用系統匣選單翻譯。');
+  if (!fs.existsSync(TRAY_LOCALIZER_SOURCE)) {
+    throw new Error(`找不到系統匣選單翻譯來源：${TRAY_LOCALIZER_SOURCE}`);
+  }
+
+  fs.mkdirSync(TRAY_LOCALIZER_DIR, { recursive: true });
+  const needsBuild = !fs.existsSync(TRAY_LOCALIZER_EXE) ||
+    fs.statSync(TRAY_LOCALIZER_SOURCE).mtimeMs > fs.statSync(TRAY_LOCALIZER_EXE).mtimeMs;
+  if (needsBuild) {
+    execFileSync(compiler, [
+      '/nologo',
+      '/target:winexe',
+      `/out:${TRAY_LOCALIZER_EXE}`,
+      TRAY_LOCALIZER_SOURCE
+    ], { encoding: 'utf8', windowsHide: true });
+  }
+  execFileSync(TRAY_LOCALIZER_EXE, ['--self-test'], { windowsHide: true });
+  return TRAY_LOCALIZER_EXE;
+}
+
+function startTrayMenuLocalizer(exe) {
+  const helper = spawn(ensureTrayMenuLocalizer(), [
+    '--exe', exe,
+    '--owner-pid', String(process.pid),
+    '--log', TRAY_LOCALIZER_LOG
+  ], {
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  return helper;
+}
+
+async function watchLocalization(source, exe) {
   if (!acquireWatcherLock()) return;
   process.on('exit', releaseWatcherLock);
+  const trayMenuLocalizer = startTrayMenuLocalizer(exe);
 
   let lastAppSeenAt = Date.now();
   const updateRestartGraceMs = 5 * 60 * 1000;
 
-  while (true) {
-    if (!ownsWatcherLock()) break;
-    if (isCopilotRunning()) {
-      lastAppSeenAt = Date.now();
-      try {
-        const state = await readLocalizationState();
-        if (!state.active) await injectAndVerify(source);
-      } catch (_) {
-        // Copilot 更新或重新建立 WebView 時可能短暫無法連線，下一輪再試。
+  try {
+    while (true) {
+      if (!ownsWatcherLock()) break;
+      if (isCopilotRunning()) {
+        lastAppSeenAt = Date.now();
+        try {
+          const state = await readLocalizationState();
+          if (!state.active) await injectAndVerify(source);
+        } catch (_) {
+          // Copilot 更新或重新建立 WebView 時可能短暫無法連線，下一輪再試。
+        }
+      } else if (Date.now() - lastAppSeenAt > updateRestartGraceMs) {
+        break;
       }
-    } else if (Date.now() - lastAppSeenAt > updateRestartGraceMs) {
-      break;
+      await sleep(2000);
     }
-    await sleep(2000);
+  } finally {
+    if (!trayMenuLocalizer.killed) trayMenuLocalizer.kill();
+    releaseWatcherLock();
   }
-
-  releaseWatcherLock();
 }
 
 async function waitForLocalizationActive(timeoutMs = 15000) {
@@ -770,13 +848,14 @@ async function main() {
   }
 
   if (options.dryRun) {
+    ensureTrayMenuLocalizer();
     console.log(`[完成] 環境與 ${Object.keys(dictionary).length} 筆譯文檢查通過。`);
     console.log(`[目標] ${options.exe}`);
     return;
   }
 
   if (options.watch) {
-    await watchLocalization(source);
+    await watchLocalization(source, options.exe);
     return;
   }
 

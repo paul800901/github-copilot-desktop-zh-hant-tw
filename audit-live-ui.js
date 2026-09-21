@@ -213,7 +213,8 @@ async function main() {
         expression: `JSON.stringify({
           lang: document.documentElement.lang,
           signature: Boolean(window.GITHUB_COPILOT_ZH_HANT_TW),
-          nativeMenuPatched: Boolean(window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU__)
+          nativeMenuPatched: Boolean(window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU__),
+          nativeMenuTranslations: window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU_TRANSLATIONS__ || []
         })`,
         returnByValue: true
       });
