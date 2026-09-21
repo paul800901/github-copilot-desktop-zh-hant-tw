@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const PROJECT_NAME = 'GitHub Copilot Desktop 繁體中文（台灣）';
-const ENGINE_VERSION = '0.2.2';
+const ENGINE_VERSION = '0.2.3';
 const SIGNATURE = 'GITHUB_COPILOT_ZH_HANT_TW';
 const DEFAULT_EXE = path.join(
   process.env.LOCALAPPDATA || '',
@@ -587,21 +587,92 @@ function isProcessRunning(pid) {
   }
 }
 
+function readWatcherLock() {
+  try {
+    if (!fs.existsSync(WATCHER_LOCK_FILE)) return null;
+    const raw = fs.readFileSync(WATCHER_LOCK_FILE, 'utf8').trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'number') return { pid: parsed, version: null };
+      return {
+        pid: Number.parseInt(parsed.pid, 10),
+        version: typeof parsed.version === 'string' ? parsed.version : null
+      };
+    } catch (_) {
+      return { pid: Number.parseInt(raw, 10), version: null };
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
+function isLocalizationWatcherProcess(pid) {
+  if (!isProcessRunning(pid)) return false;
+  try {
+    const command = [
+      `$process = Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" -ErrorAction SilentlyContinue`,
+      'if ($process) { $process.CommandLine }'
+    ].join('; ');
+    const commandLine = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', command],
+      { encoding: 'utf8', windowsHide: true }
+    );
+    return /localization_engine\.js/i.test(commandLine) && /--watch(?:\s|$)/i.test(commandLine);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function stopWatcher(lock) {
+  if (!lock || !isProcessRunning(lock.pid)) return;
+  if (!isLocalizationWatcherProcess(lock.pid)) {
+    throw new Error('背景監看鎖定檔指向其他程序，為避免誤關程式已停止啟動。');
+  }
+  process.kill(lock.pid);
+  const deadline = Date.now() + 5000;
+  while (isProcessRunning(lock.pid) && Date.now() < deadline) await sleep(100);
+  if (isProcessRunning(lock.pid)) throw new Error('舊的背景翻譯監看程序無法結束。');
+  try {
+    if (fs.existsSync(WATCHER_LOCK_FILE)) fs.unlinkSync(WATCHER_LOCK_FILE);
+  } catch (_) {}
+}
+
+async function prepareWatcher({ reuseMatching }) {
+  const lock = readWatcherLock();
+  if (!lock || !Number.isInteger(lock.pid) || lock.pid <= 0) return null;
+  if (!isProcessRunning(lock.pid)) {
+    try { fs.unlinkSync(WATCHER_LOCK_FILE); } catch (_) {}
+    return null;
+  }
+  if (!isLocalizationWatcherProcess(lock.pid)) {
+    try { fs.unlinkSync(WATCHER_LOCK_FILE); } catch (_) {}
+    return null;
+  }
+  if (reuseMatching && lock.version === ENGINE_VERSION) return lock;
+  await stopWatcher(lock);
+  return null;
+}
+
 function acquireWatcherLock() {
   fs.mkdirSync(path.dirname(WATCHER_LOCK_FILE), { recursive: true });
-  if (fs.existsSync(WATCHER_LOCK_FILE)) {
-    const existingPid = Number.parseInt(fs.readFileSync(WATCHER_LOCK_FILE, 'utf8').trim(), 10);
-    if (isProcessRunning(existingPid)) return false;
-  }
-  fs.writeFileSync(WATCHER_LOCK_FILE, String(process.pid), 'utf8');
+  const existing = readWatcherLock();
+  if (existing && isProcessRunning(existing.pid)) return false;
+  fs.writeFileSync(WATCHER_LOCK_FILE, JSON.stringify({
+    pid: process.pid,
+    version: ENGINE_VERSION
+  }), 'utf8');
   return true;
+}
+
+function ownsWatcherLock() {
+  return readWatcherLock()?.pid === process.pid;
 }
 
 function releaseWatcherLock() {
   try {
-    if (!fs.existsSync(WATCHER_LOCK_FILE)) return;
-    const ownerPid = Number.parseInt(fs.readFileSync(WATCHER_LOCK_FILE, 'utf8').trim(), 10);
-    if (ownerPid === process.pid) fs.unlinkSync(WATCHER_LOCK_FILE);
+    if (ownsWatcherLock()) fs.unlinkSync(WATCHER_LOCK_FILE);
   } catch (_) {}
 }
 
@@ -613,6 +684,7 @@ async function watchLocalization(source) {
   const updateRestartGraceMs = 5 * 60 * 1000;
 
   while (true) {
+    if (!ownsWatcherLock()) break;
     if (isCopilotRunning()) {
       lastAppSeenAt = Date.now();
       try {
@@ -628,6 +700,23 @@ async function watchLocalization(source) {
   }
 
   releaseWatcherLock();
+}
+
+async function waitForLocalizationActive(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    if (!isCopilotRunning()) throw new Error('GitHub Copilot 在翻譯完成前已退出。');
+    try {
+      const state = await readLocalizationState(1500);
+      if (state.active) return state;
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(300);
+  }
+  const detail = lastError ? `：${lastError.message}` : '';
+  throw new Error(`背景監看程序未能套用翻譯${detail}`);
 }
 
 function startBackgroundWatcher(exe) {
@@ -695,6 +784,7 @@ async function main() {
     if (!isCopilotRunning()) {
       throw new Error('GitHub Copilot 尚未執行，請改用 start-win.bat 啟動繁中版。');
     }
+    await prepareWatcher({ reuseMatching: false });
     const { port } = await injectAndVerify(source);
     startBackgroundWatcher(options.exe);
     console.log(`[完成] 已將 ${Object.keys(dictionary).length} 筆最新譯文套用到執行中的介面。`);
@@ -706,6 +796,8 @@ async function main() {
     throw new Error('請先完全關閉 GitHub Copilot，再由 start-win.bat 啟動繁中版。');
   }
 
+  let reusableWatcher = await prepareWatcher({ reuseMatching: true });
+
   console.log(`[啟動] ${options.exe}`);
   const child = spawn(options.exe, [], {
     detached: true,
@@ -716,13 +808,32 @@ async function main() {
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=0'
     }
   });
+
+  const earlyExit = new Promise((_, reject) => {
+    child.once('exit', (code, signal) => {
+      reject(new Error(`GitHub Copilot 啟動後提早退出（代碼 ${code ?? '無'}，訊號 ${signal ?? '無'}）。`));
+    });
+  });
   child.unref();
 
-  const { port } = await injectAndVerify(source);
-  startBackgroundWatcher(options.exe);
+  let result;
+  if (reusableWatcher) {
+    try {
+      result = await Promise.race([waitForLocalizationActive(), earlyExit]);
+    } catch (error) {
+      if (!isCopilotRunning()) throw error;
+      await stopWatcher(reusableWatcher);
+      reusableWatcher = null;
+      result = await Promise.race([injectAndVerify(source), earlyExit]);
+      startBackgroundWatcher(options.exe);
+    }
+  } else {
+    result = await Promise.race([injectAndVerify(source), earlyExit]);
+    startBackgroundWatcher(options.exe);
+  }
 
   console.log(`[完成] 已套用 ${Object.keys(dictionary).length} 筆繁體中文（台灣）介面譯文。`);
-  console.log(`[驗證] WebView 語言已設為 zh-TW，本機除錯連線使用動態連接埠 ${port}。`);
+  console.log(`[驗證] WebView 語言已設為 zh-TW，本機除錯連線使用動態連接埠 ${result.port}。`);
   console.log('[監看] 已啟用更新與介面重新載入後的自動補回。');
 }
 
