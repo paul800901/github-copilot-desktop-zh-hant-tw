@@ -1,0 +1,19 @@
+{
+  "Early-access features that may change or be removed. Help shape the product by trying them out and sharing feedback.": "可能會變更或移除的早期存取功能。歡迎試用並分享意見，協助完善產品。",
+  "Verbosity control": "詳細程度控制",
+  "Adds a Verbosity setting under Sessions to choose how much detail sessions show: Minimal collapses a completed turn's tool calls and intermediate messages behind a summary, Balanced bundles consecutive tool calls into one panel, and Detailed shows everything.": "在「工作階段」下新增「詳細程度」設定，用來選擇工作階段顯示多少細節：「簡約」會將已完成回合的工具呼叫與中間訊息收合在摘要後方；「平衡」會將連續的工具呼叫整合到同一面板；「詳細」則顯示所有內容。",
+  "Cloud sessions": "雲端工作階段",
+  "Run sessions in a cloud sandbox.": "在雲端沙箱中執行工作階段。",
+  "Agents": "Agent",
+  "Session automations": "工作階段自動化",
+  "Create lightweight automations by repeating prompts on a schedule.": "依排程重複執行提示詞，建立輕量自動化作業。",
+  "Rubber-duck agent": "小黃鴨 Agent",
+  "Enable the rubber-duck subagent for constructive feedback on code and designs (Claude and GPT models only). Adds the /rubber-duck slash command to the composer. Restart the app after toggling.": "啟用小黃鴨子 Agent，針對程式碼與設計提供建設性意見（僅限 Claude 與 GPT 模型）。這會在編輯器新增 /rubber-duck 斜線指令。切換後請重新啟動應用程式。",
+  "Voice dictation": "語音聽寫",
+  "Record speech with a shortcut and transcribe it locally into the composer.": "使用快速鍵錄製語音，並在本機轉寫到編輯器。",
+  "Use bundled git": "使用內附的 Git",
+  "Use the git binary shipped with the app instead of the system-installed one. Falls back to your system git when off.": "使用應用程式內附的 Git 執行檔，而不是系統安裝的版本。關閉時改用系統的 Git。",
+  "Other": "其他",
+  "Impeccable design skill": "Impeccable 設計技能",
+  "Adds /impeccable, a frontend design and UI-craft skill by Paul Bakaus (impeccable.style), bundled under Apache-2.0. Its optional automation scripts need Node 18+ on your PATH; without Node the agent falls back to the design guidance alone.": "新增 /impeccable，這是由 Paul Bakaus（impeccable.style）製作的前端設計與 UI 工藝技能，以 Apache-2.0 授權內附。其選用自動化指令碼需要 PATH 中有 Node 18 以上版本；若無 Node，Agent 將僅使用設計指引。"
+}

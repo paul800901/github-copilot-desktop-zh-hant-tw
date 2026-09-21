@@ -1,0 +1,24 @@
+{
+  "name": "github-copilot-desktop-zh-hant-tw",
+  "version": "0.2.2",
+  "private": true,
+  "description": "GitHub Copilot Desktop 繁體中文（台灣）介面本機化工具",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paul800901/github-copilot-desktop-zh-hant-tw.git"
+  },
+  "homepage": "https://github.com/paul800901/github-copilot-desktop-zh-hant-tw#readme",
+  "bugs": {
+    "url": "https://github.com/paul800901/github-copilot-desktop-zh-hant-tw/issues"
+  },
+  "scripts": {
+    "check": "node --check localization_engine.js && node --check audit-live-ui.js && node validate-localization.js",
+    "audit:live": "node audit-live-ui.js",
+    "start": "node localization_engine.js",
+    "version": "node localization_engine.js --version"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

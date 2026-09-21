@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.local/
+
+# 本機捷徑圖示含第三方商標，不納入公開原始碼。
+assets/
