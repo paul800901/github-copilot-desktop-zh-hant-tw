@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const PROJECT_NAME = 'GitHub Copilot Desktop 繁體中文（台灣）';
-const ENGINE_VERSION = '0.2.7';
+const ENGINE_VERSION = '0.2.8';
 const SIGNATURE = 'GITHUB_COPILOT_ZH_HANT_TW';
 const DEFAULT_EXE = path.join(
   process.env.LOCALAPPDATA || '',
@@ -528,7 +528,6 @@ async function injectAndVerify(source, timeoutMs = 45000) {
   let stableSince = 0;
   let verifiedPort = null;
   let lastError = null;
-  let pageReloaded = false;
 
   while (Date.now() < deadline) {
     try {
@@ -541,6 +540,21 @@ async function injectAndVerify(source, timeoutMs = 45000) {
       }
       const cdp = await connectCdp(target.webSocketDebuggerUrl);
       try {
+        const readiness = await cdp.send('Runtime.evaluate', {
+          expression: `JSON.stringify({
+            ready: document.readyState,
+            hasBody: Boolean(document.body && document.body.innerText.trim())
+          })`,
+          returnByValue: true
+        });
+        const page = JSON.parse(readiness.result.value);
+        if (page.ready !== 'complete' || !page.hasBody) {
+          stableTargetId = null;
+          stableSince = 0;
+          await sleep(250);
+          continue;
+        }
+
         await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
         const injection = await cdp.send('Runtime.evaluate', {
           expression: source,
@@ -550,13 +564,6 @@ async function injectAndVerify(source, timeoutMs = 45000) {
         if (injection.exceptionDetails) {
           throw new Error(injection.exceptionDetails.text || '介面翻譯腳本執行失敗。');
         }
-        if (!pageReloaded) {
-          pageReloaded = true;
-          await cdp.send('Page.reload', { ignoreCache: true });
-          await sleep(1200);
-          continue;
-        }
-
         const verification = await cdp.send('Runtime.evaluate', {
           expression: `JSON.stringify({
             signature: window.${SIGNATURE}?.version === ${JSON.stringify(ENGINE_VERSION)},
