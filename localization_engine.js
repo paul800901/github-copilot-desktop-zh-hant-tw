@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 
 const PROJECT_NAME = 'GitHub Copilot Desktop 繁體中文（台灣）';
-const ENGINE_VERSION = '0.2.8';
+const ENGINE_VERSION = '0.2.9';
 const SIGNATURE = 'GITHUB_COPILOT_ZH_HANT_TW';
 const DEFAULT_EXE = path.join(
   process.env.LOCALAPPDATA || '',
