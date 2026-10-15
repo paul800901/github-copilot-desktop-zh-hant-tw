@@ -74,6 +74,8 @@ function browserLocalization(dictionary, engineVersion) {
   const signature = 'GITHUB_COPILOT_ZH_HANT_TW';
   if (window[signature]?.version === engineVersion) return;
   window[signature]?.dispose?.();
+  // Set by dispose(); stops this injection's timers, observers and shadow hook from coming back.
+  let disposed = false;
 
   const map = new Map(Object.entries(dictionary));
   const nativeMenuMap = new Map([
@@ -259,9 +261,10 @@ function browserLocalization(dictionary, engineVersion) {
   }
 
   function watchForNativeMenuModule() {
+    if (window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU__) return () => {};
     let stopped = false;
     const tryPatch = () => {
-      if (stopped || window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU__) return;
+      if (stopped || disposed || window.__GITHUB_COPILOT_ZH_HANT_TW_NATIVE_MENU__) return;
       patchNativeMenuModule().then(patched => {
         if (patched) {
           stopped = true;
@@ -275,9 +278,13 @@ function browserLocalization(dictionary, engineVersion) {
     setTimeout(tryPatch, 0);
     setTimeout(tryPatch, 100);
     setTimeout(tryPatch, 500);
+    return () => {
+      stopped = true;
+      observer.disconnect();
+    };
   }
 
-  watchForNativeMenuModule();
+  const stopNativeMenuWatch = watchForNativeMenuModule();
 
   function isBlocked(node, allowDirectFormAttribute = false) {
     let element = node && node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
@@ -372,6 +379,7 @@ function browserLocalization(dictionary, engineVersion) {
   const originalAttachShadow = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function attachShadowWithLocalization() {
     const shadowRoot = originalAttachShadow.apply(this, arguments);
+    if (disposed) return shadowRoot;
     try {
       observer.observe(shadowRoot, observerOptions);
       translateTree(shadowRoot);
@@ -381,7 +389,7 @@ function browserLocalization(dictionary, engineVersion) {
 
   function start() {
     const root = document.body || document.documentElement;
-    if (!root) return;
+    if (disposed || !root) return;
     document.documentElement.lang = 'zh-TW';
     observer.observe(root, observerOptions);
     translateTree(root);
@@ -398,9 +406,10 @@ function browserLocalization(dictionary, engineVersion) {
   setTimeout(start, 1500);
   window[signature] = {
     version: engineVersion,
-    installedAt: new Date().toISOString(),
     dispose() {
+      disposed = true;
       observer.disconnect();
+      stopNativeMenuWatch();
       if (Element.prototype.attachShadow === this.attachShadow) {
         Element.prototype.attachShadow = originalAttachShadow;
       }
@@ -868,7 +877,8 @@ async function main() {
     await prepareWatcher({ reuseMatching: false });
     const { port } = await injectAndVerify(source);
     startBackgroundWatcher(options.exe);
-    console.log(`[完成] 已將 ${Object.keys(dictionary).length} 筆最新譯文套用到執行中的介面。`);
+    console.log(`[完成] 已載入 ${Object.keys(dictionary).length} 筆最新譯文；之後出現的文字使用新譯文。`);
+    console.log('[提醒] 畫面上已經翻好的文字不會改寫；要全部換成新譯文，請關閉 GitHub Copilot 後用 start-win.bat 重新開啟。');
     console.log(`[驗證] WebView 語言已設為 zh-TW，本機除錯連線使用動態連接埠 ${port}。`);
     return;
   }

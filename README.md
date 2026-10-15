@@ -49,7 +49,7 @@ GitHub Copilot Desktop 將前端壓縮後內嵌在 Tauri `github.exe` 中，不�
 node localization_engine.js --exe "D:\path\to\github.exe"
 ```
 
-若繁中版已在執行，而您剛更新字典，可直接套用最新版：
+若繁中版已在執行，而您剛更新字典，可先套用到之後出現的文字（畫面上已翻好的文字不會改寫；要全部換成新譯文，請關閉 GitHub Copilot 後用 `start-win.bat` 重新開啟）：
 
 ```powershell
 node localization_engine.js --apply

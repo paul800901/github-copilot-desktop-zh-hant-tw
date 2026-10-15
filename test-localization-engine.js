@@ -29,3 +29,41 @@ test('同一份字典不重複注入；字典改了就重新注入', () => {
 test('驗證與執行時使用相同的正規化（彎引號視為同一鍵）', () => {
   assert.equal(normalizeText('Don’t  save'), normalizeText("Don't save"));
 });
+
+function fakePage() {
+  const observers = [];
+  const timers = [];
+  class FakeMutationObserver {
+    constructor() { this.active = false; observers.push(this); }
+    observe() { this.active = true; }
+    disconnect() { this.active = false; }
+  }
+  const node = { nodeType: 1, tagName: 'BODY', childNodes: [], childElementCount: 0, className: '',
+    isContentEditable: false, parentElement: null, parentNode: null,
+    getAttribute: () => null, hasAttribute: () => false };
+  const document = { readyState: 'complete', body: node, documentElement: { lang: '' },
+    querySelectorAll: () => [], addEventListener() {} };
+  class Element {}
+  Element.prototype.attachShadow = function () { return {}; };
+  const context = {
+    window: { addEventListener() {} }, document, Element,
+    MutationObserver: FakeMutationObserver,
+    Node: { TEXT_NODE: 3, ELEMENT_NODE: 1, DOCUMENT_FRAGMENT_NODE: 11 },
+    performance: { getEntriesByType: () => [] },
+    setTimeout: fn => timers.push(fn),
+  };
+  return { context, observers, timers };
+}
+
+test('換字典重新注入時，舊注入的觀察器與計時器不會再接回來', () => {
+  const page = fakePage();
+  vm.runInNewContext(buildInjectedSource({ Settings: '設定' }), page.context);
+  const oldObservers = [...page.observers];
+  assert.ok(oldObservers.some(observer => observer.active));
+
+  vm.runInNewContext(buildInjectedSource({ Settings: '組態' }), page.context);
+  for (const run of page.timers.splice(0)) run();
+
+  assert.ok(oldObservers.every(observer => !observer.active));
+  assert.ok(page.observers.filter(observer => !oldObservers.includes(observer)).some(observer => observer.active));
+});
