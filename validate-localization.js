@@ -2,6 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+// Same normalization as the runtime, so a curly-quote duplicate is reported as a conflict.
+const { normalizeText } = require('./localization_engine');
 
 const DICTS_DIR = path.join(__dirname, 'dicts');
 const REQUIRED_FILES = ['common.json', 'home.json', 'settings.json', 'zz_taiwan_terminology.json'];
@@ -17,9 +19,6 @@ const FORBIDDEN_TAIWAN_TERMS = [
   ['質量', '品質']
 ];
 
-function normalizeText(text) {
-  return text.normalize('NFKC').replace(/\s+/g, ' ').trim();
-}
 
 function fail(message) {
   console.error(`[錯誤] ${message}`);

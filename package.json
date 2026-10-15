@@ -13,10 +13,11 @@
     "url": "https://github.com/paul800901/github-copilot-desktop-zh-hant-tw/issues"
   },
   "scripts": {
-    "check": "node --check localization_engine.js && node --check audit-live-ui.js && node validate-localization.js",
+    "check": "node --check localization_engine.js && node --check audit-live-ui.js && node validate-localization.js && node --test test-localization-engine.js",
     "audit:live": "node audit-live-ui.js",
     "start": "node localization_engine.js",
-    "version": "node localization_engine.js --version"
+    "version": "node localization_engine.js --version",
+    "test": "node --test test-localization-engine.js"
   },
   "engines": {
     "node": ">=22"

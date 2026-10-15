@@ -62,7 +62,9 @@ npm run check
 node localization_engine.js --dry-run
 ```
 
-要從已啟動的繁中版讀取各設定分頁，可執行：
+`npm run check` 會做語法、字典檢查與單元測試。`--dry-run` 不啟動 GitHub Copilot，但會建立 `.local` 資料夾，必要時編譯系統匣中文化小程式並執行它的自我測試。
+
+要從已啟動的繁中版讀取各設定分頁的實際文字，可執行下列指令。它會在介面上點擊導覽、切換分頁並把結果寫到 `.local`，不是純讀取；不會改動 `github.exe`。
 
 ```powershell
 npm run audit:live -- "工作階段"

@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
@@ -28,6 +29,10 @@ const TRAY_LOCALIZER_SOURCE = path.join(__dirname, 'tray-menu-localizer.cs');
 const TRAY_LOCALIZER_DIR = path.join(__dirname, '.local');
 const TRAY_LOCALIZER_EXE = path.join(TRAY_LOCALIZER_DIR, `tray-menu-localizer-${ENGINE_VERSION}.exe`);
 const TRAY_LOCALIZER_LOG = path.join(TRAY_LOCALIZER_DIR, 'tray-menu-localizer.log');
+// Identity of the injected script: engine version plus dictionary content, so a dictionary edit
+// is re-applied even when ENGINE_VERSION stays the same. Set once in main() from the loaded dictionary.
+let injectionVersion = ENGINE_VERSION;
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -404,8 +409,13 @@ function browserLocalization(dictionary, engineVersion) {
   };
 }
 
+function injectionId(dictionary) {
+  const digest = crypto.createHash('sha256').update(JSON.stringify(dictionary)).digest('hex');
+  return `${ENGINE_VERSION}+${digest.slice(0, 12)}`;
+}
+
 function buildInjectedSource(dictionary) {
-  return `(${browserLocalization.toString()})(${JSON.stringify(dictionary)}, ${JSON.stringify(ENGINE_VERSION)});`;
+  return `(${browserLocalization.toString()})(${JSON.stringify(dictionary)}, ${JSON.stringify(injectionId(dictionary))});`;
 }
 
 function isCopilotRunning() {
@@ -463,7 +473,6 @@ function connectCdp(webSocketUrl) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(webSocketUrl);
     const pending = new Map();
-    const eventHandlers = new Map();
     let nextId = 1;
 
     const timeout = setTimeout(() => {
@@ -487,27 +496,13 @@ function connectCdp(webSocketUrl) {
         },
         close() {
           socket.close();
-        },
-        onEvent(method, handler) {
-          if (!eventHandlers.has(method)) eventHandlers.set(method, new Set());
-          eventHandlers.get(method).add(handler);
-          return () => eventHandlers.get(method)?.delete(handler);
         }
       });
     });
 
     socket.addEventListener('message', event => {
       const message = JSON.parse(String(event.data));
-      if (!message.id) {
-        const handlers = eventHandlers.get(message.method);
-        if (handlers) {
-          for (const handler of handlers) {
-            Promise.resolve(handler(message.params || {})).catch(() => {});
-          }
-        }
-        return;
-      }
-      if (!pending.has(message.id)) return;
+      if (!message.id || !pending.has(message.id)) return;
       const request = pending.get(message.id);
       pending.delete(message.id);
       clearTimeout(request.timeout);
@@ -526,18 +521,12 @@ async function injectAndVerify(source, timeoutMs = 45000) {
   const deadline = Date.now() + timeoutMs;
   let stableTargetId = null;
   let stableSince = 0;
-  let verifiedPort = null;
   let lastError = null;
 
   while (Date.now() < deadline) {
     try {
       const remaining = Math.max(1000, deadline - Date.now());
       const { target, port } = await readDebugTarget(Math.min(remaining, 3000));
-      verifiedPort = port;
-      if (!target.url || target.url === 'about:blank') {
-        await sleep(250);
-        continue;
-      }
       const cdp = await connectCdp(target.webSocketDebuggerUrl);
       try {
         const readiness = await cdp.send('Runtime.evaluate', {
@@ -566,7 +555,7 @@ async function injectAndVerify(source, timeoutMs = 45000) {
         }
         const verification = await cdp.send('Runtime.evaluate', {
           expression: `JSON.stringify({
-            signature: window.${SIGNATURE}?.version === ${JSON.stringify(ENGINE_VERSION)},
+            signature: window.${SIGNATURE}?.version === ${JSON.stringify(injectionVersion)},
             lang: document.documentElement.lang,
             ready: document.readyState,
             hasBody: Boolean(document.body && document.body.innerText.trim())
@@ -581,7 +570,7 @@ async function injectAndVerify(source, timeoutMs = 45000) {
             stableTargetId = target.id;
             stableSince = Date.now();
           } else if (Date.now() - stableSince >= 2000) {
-            return { port: verifiedPort, targetId: stableTargetId };
+            return { port };
           }
         } else {
           stableTargetId = null;
@@ -604,15 +593,12 @@ async function injectAndVerify(source, timeoutMs = 45000) {
 
 async function readLocalizationState(timeoutMs = 3000) {
   const { target, port } = await readDebugTarget(timeoutMs);
-  if (!target.url || target.url === 'about:blank') {
-    return { active: false, targetId: target.id, port };
-  }
 
   const cdp = await connectCdp(target.webSocketDebuggerUrl);
   try {
     const response = await cdp.send('Runtime.evaluate', {
       expression: `JSON.stringify({
-        signature: window.${SIGNATURE}?.version === ${JSON.stringify(ENGINE_VERSION)},
+        signature: window.${SIGNATURE}?.version === ${JSON.stringify(injectionVersion)},
         lang: document.documentElement.lang,
         hasBody: Boolean(document.body && document.body.innerText.trim())
       })`,
@@ -621,7 +607,6 @@ async function readLocalizationState(timeoutMs = 3000) {
     const state = JSON.parse(response.result.value);
     return {
       active: state.signature && state.lang === 'zh-TW' && state.hasBody,
-      targetId: target.id,
       port
     };
   } finally {
@@ -702,7 +687,7 @@ async function prepareWatcher({ reuseMatching }) {
     try { fs.unlinkSync(WATCHER_LOCK_FILE); } catch (_) {}
     return null;
   }
-  if (reuseMatching && lock.version === ENGINE_VERSION) return lock;
+  if (reuseMatching && lock.version === injectionVersion) return lock;
   await stopWatcher(lock);
   return null;
 }
@@ -713,7 +698,7 @@ function acquireWatcherLock() {
   if (existing && isProcessRunning(existing.pid)) return false;
   fs.writeFileSync(WATCHER_LOCK_FILE, JSON.stringify({
     pid: process.pid,
-    version: ENGINE_VERSION
+    version: injectionVersion
   }), 'utf8');
   return true;
 }
@@ -856,6 +841,7 @@ async function main() {
   }
 
   const dictionary = loadDictionary();
+  injectionVersion = injectionId(dictionary);
   const source = buildInjectedSource(dictionary);
   new Function(source);
 
@@ -891,7 +877,7 @@ async function main() {
     throw new Error('請先完全關閉 GitHub Copilot，再由 start-win.bat 啟動繁中版。');
   }
 
-  let reusableWatcher = await prepareWatcher({ reuseMatching: true });
+  const reusableWatcher = await prepareWatcher({ reuseMatching: true });
 
   console.log(`[啟動] ${options.exe}`);
   const child = spawn(options.exe, [], {
@@ -918,7 +904,6 @@ async function main() {
     } catch (error) {
       if (!isCopilotRunning()) throw error;
       await stopWatcher(reusableWatcher);
-      reusableWatcher = null;
       result = await Promise.race([injectAndVerify(source), earlyExit]);
       startBackgroundWatcher(options.exe);
     }
@@ -932,7 +917,11 @@ async function main() {
   console.log('[監看] 已啟用更新與介面重新載入後的自動補回。');
 }
 
-main().catch(error => {
-  console.error(`[錯誤] ${error.message}`);
-  process.exitCode = 1;
-});
+module.exports = { normalizeText, injectionId, buildInjectedSource };
+
+if (require.main === module) {
+  main().catch(error => {
+    console.error(`[錯誤] ${error.message}`);
+    process.exitCode = 1;
+  });
+}
